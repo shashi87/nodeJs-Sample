@@ -1,0 +1,23 @@
+﻿{
+    "development": {
+     "username": "Test",
+        "password": "*************",
+        "database": "dec2020",
+        "host": "rds.amazonaws.com",
+        "dialect": "postgres"
+    },
+    "test": {
+        "username": "Test",
+        "password": "*************",
+        "database": "dec2020",
+        "host": "rds.amazonaws.com",
+        "dialect": "postgres"
+    },
+    "production": {
+       "username": "Test",
+        "password": "*************",
+        "database": "dec2020",
+        "host": "rds.amazonaws.com",
+        "dialect": "postgres"
+   }
+}

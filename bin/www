@@ -1,0 +1,581 @@
+/**
+ * Module dependencies.
+ */
+
+var app = require('../app');
+var models = require("../app/models");
+var debug = require('debug')('lifesharecare:server');
+var fs = require('fs');
+var useragent = require('useragent');
+var geoip = require('geoip-lite');
+var os = require('os');
+var publicIp = require('public-ip');
+var path = require("path");
+var root = process.cwd();
+var CONSTANT_OBJ = require(path.resolve(root, 'constants.js'));
+var externalip = require('externalip')
+var express = require('express');
+var passport = require('passport');
+var LocalStrategy = require('passport-local').Strategy;
+var bcrypt = require('bcryptjs');
+var moment = require("moment");
+var Sequelize = require('sequelize');
+var cryptoService = require("../app/services/crypto");
+var STRING_CONSTANTS = require("../app/constants/stringConstants.js");
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || '8002');
+console.log("port", port);
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+
+passport.use('local-login', new LocalStrategy({
+	passReqToCallback: true
+},
+	function (req, username, password, done) {
+		process.nextTick(function () {
+			// check in SEQUILIZE if a user with username exists or not
+			models.users.findOne({
+				include: [{
+					model: models.users_password,
+					attributes: ["user_password", "user_id"]
+				}],
+				where: {
+					email_id: { ilike: username },
+					type_id: req.body.type,
+					is_deleted: false
+				}
+			}, {
+					attributes: ["id", "typeId", "email_id", "first_name", "last_name", "is_active", "parent_user", "failed_attempts", "last_attempt", "is_deleted"]
+				}).then(function (user) {
+					var agent = useragent.parse(req.headers['user-agent']);
+					var browser = agent.toString();
+					var ip = req.ip;
+					var geo = geoip.lookup(ip);
+					
+					if (!user) {
+						return done(null, false, {
+							'message': 'Invalid credentials.'
+						});
+					}
+
+					if (!user.dataValues.users_password) {
+
+						return done(null, false, {
+							'message': 'Invalid credentials.'
+						});
+					}
+
+					if (user.is_deleted == true) {
+						return done(null, false, {
+							'message': ' Admin has deleted your account.'
+						});
+					} else if (user.is_active == false) {
+						return done(null, false, {
+							'message': 'Oops. looks like your account has been deactivated. Don\'t Worry, your aides can still perform their tasks! Please contact info@orah.care to resolve this.'
+						});
+					} else { }
+					// User exists but wrong password, log the error
+					console.log('^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^6')
+					if (!isValidPassword(user.dataValues.users_password.dataValues.user_password, password)) {
+						updateLoginAttempts(user.id, ip, browser, geo, false);
+						console.log('*****************************first11111user********************************')
+						if (!user.last_attempt) {
+							if (user.failed_attempts == 4 && user.typeId != 1) {
+								updateFailedLogin(user.id, user.failed_attempts);
+								return done(null, false, {
+									'message': 'You are blocked for 24 hours!'
+								}); // redirect back to login page
+							} else {
+								if (user.typeId != 1) {
+									updateFailedLogin(user.id, user.failed_attempts);
+								}
+								return done(null, false, {
+									'message': 'Invalid credentials!'
+								}); // redirect back to login page
+							}
+						} else {
+							var currentdate = new Date();
+							var newdate = new Date(user.last_attempt.setTime(user.last_attempt.getTime() + 24 * 60 * 60 * 1000));
+							if (Math.abs(newdate.getTime()) <= Math.abs(currentdate.getTime())) {
+								data = {
+									"failed_attempts": 1,
+									"last_attempt": null
+								};
+								models.users.update(data, {
+									where: {
+										id: user.id
+									}
+								}).then(function (user) {
+									console.log("updateData", user);
+								})
+									.catch(function (err) {
+										console.log('\n\n\n', err);
+
+									});
+								return done(null, false, {
+									'message': 'Invalid credentials!'
+								}); // redirect back to login page
+							} else {
+								console.log('Your account is blocked!Your account is blocked!')
+								return done(null, false, {
+									'message': 'Your account is blocked!'
+								}); // redirect back to login page
+							}
+
+						}
+
+
+					} else {
+						var data = {};
+						if (user.last_attempt) {
+							var currentdate = new Date();
+							var newdate = new Date(user.last_attempt.setTime(user.last_attempt.getTime() + 24 * 60 * 60 * 1000));
+							if (Math.abs(newdate.getTime()) <= Math.abs(currentdate.getTime())) {
+								data = {
+									"failed_attempts": 0,
+									"last_attempt": null
+								};
+								models.users.update(data, {
+									where: {
+										id: user.id
+									}
+								}).then(function (user) {
+								})
+									.catch(function (err) {
+										console.log('\n\n\n', err);
+
+									});
+								models.false_attempts.update({ count: 0 }, {
+									where: {
+										ip: ip
+									}
+								}).then(function (user) {
+								})
+									.catch(function (err) {
+										console.log('\n\n\n', err);
+
+									});
+															console.log('*****************************ujgjgjgjgjgjr********************************')
+								updateLoginAttempts(user.id, ip, browser, geo, true);
+								return done(null, user);
+							} else {
+														console.log('*****************************yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy********************************')
+                                 return done(null, false, {
+									'message': 'Your account is blocked!'
+								});
+								updateLoginAttempts(user.id, ip, browser, geo, false);
+								 // redirect back to login page
+							}
+
+
+						} else {
+							data = {
+								"failed_attempts": 0,
+								"last_attempt": null
+							};
+							models.users.update(data, {
+								where: {
+									id: user.id
+								}
+							}).then(function (user) {
+							})
+								.catch(function (err) {
+									console.log('\n\n\n', err);
+
+								});
+							models.false_attempts.update({ count: 0 }, {
+								where: {
+									ip: ip
+								}
+							}).then(function (user) {
+							})
+								.catch(function (err) {
+									console.log('\n\n\n', err);
+
+								});
+							console.log('*****************************lasttttt********************************')
+
+							updateLoginAttempts(user.id, ip, browser, geo, true);
+							return done(null, user,{});
+						}
+
+
+					}
+				});
+		});
+	}));
+var isValidPassword = function (userPassword, password) {
+	return bcrypt.compareSync(password, userPassword);
+}
+
+app.use(function (req, res, next) {
+	// Website you wish to allow to connect
+	res.header('Access-Control-Allow-Origin', req.headers.origin);
+
+	// Request methods you wish to allow
+	res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+
+	// Request headers you wish to allow
+	res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, OPTIONS, access-control-allow-origin, access-control-allow-headers, access-control-allow-methods');
+
+	// Allow credentials
+	res.header('Access-Control-Allow-Credentials', true);
+
+	// Pass to next layer of middleware
+	next();
+});
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+
+
+passport.serializeUser(function (user, done) {
+	console.log('--------------------------serializeUser------------------------', user)
+	done(null, user.id);
+});
+
+passport.deserializeUser(function (id, done) {
+	console.log('-----------------deserializeUser------')
+	models.users.findOne({
+		where: {
+			id: id
+		}
+	}, {
+			attributes: ["id", "typeId", "email_id", "first_name", "last_name", "is_active", 'parent_user', 'time_offSet']
+		}).then(function (user) {
+			done(null, user ? user.dataValues : null);
+		});
+});
+
+var options = {
+	key: fs.readFileSync(path.join(__dirname + '/../config/ssl/lsc.key')),
+	cert: fs.readFileSync(path.join(__dirname + './../config/ssl/lsc.crt')),
+	//ca: [fs.readFileSync(path.join(__dirname +'./../config/ssl/gd1.crt')), fs.readFileSync(path.join(__dirname +'./../config/ssl/gd2.crt')) , fs.readFileSync(path.join(__dirname +'./../config/ssl/gd3.crt')) ],
+	ciphers: ['ALL',
+		'ECDHE-RSA-AES256-SHA384',
+		'DHE-RSA-AES256-SHA384',
+		'ECDHE-RSA-AES256-SHA256',
+		'DHE-RSA-AES256-SHA256',
+		'ECDHE-RSA-AES128-SHA256',
+		'DHE-RSA-AES128-SHA256',
+		'CDHE-RSA-AES128-SHA256',
+		'HIGH',
+		'!aNULL',
+		'!eNULL',
+		'!EXPORT',
+		'!DES',
+		'!MD5',
+		'!PSK',
+		'!SRP',
+		'!CAMELLIA',
+		//'AES128-GCM-SHA256',
+		'!ADH',
+		'!RC4',
+		'!LOW',
+		'!SSLv2',
+		'!SSLv3!EXPORT',
+		'!AES256-SHA'].join(':'),
+	honorCipherOrder: true
+}
+
+if (process.env.NODE_ENV === 'production') {
+	var https = require('https');
+	var server = https.createServer(options, app);
+} else {
+	var http = require('http');
+	var server = http.createServer(app);
+}
+
+console.log(process.env.NODE_ENV, 'process.env.NODE_ENV');
+
+var io = require('socket.io').listen(server);
+
+// routes
+require('../routes/index.js')(app, express, passport);
+require('../routes/authenticate.js')(app, express, passport);
+require('../routes/invite.js')(app, express, passport);
+require('../routes/aide.js')(app, express, passport);
+require('../routes/agency.js')(app, express, passport, io);
+require('../routes/lone.js')(app, express, passport);
+require('../routes/snapshot.js')(app, express, passport);
+require('../app/controllers/crons.js');
+require('../app/controllers/pushCron.js');
+require('../app/controllers/pushEcCron.js');
+require('../routes/performance.js')(app, express, passport);
+require('../routes/albums.js')(app, express, passport);
+require('../routes/verification.js')(app, express, passport, io);
+require('../routes/aideApp.js')(app, express, passport, io);
+require('../routes/login_details.js')(app, express, passport);
+require('../routes/familyApp.js')(app, express, passport);
+require('../routes/substitution.js')(app, express, passport);
+require('../routes/authorization.js')(app, express, passport);
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+
+models.sequelize.sync().then(function () {
+	server.listen(app.get('port'), function () { });
+});
+
+// server.listen(port);
+
+server.on('error', onError);
+server.on('listening', onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+	var port = parseInt(val, 10);
+
+	if (isNaN(port)) {
+		// named pipe
+		return val;
+	}
+
+	if (port >= 0) {
+		// port number
+		return port;
+	}
+
+	return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+	if (error.syscall !== 'listen') {
+		throw error;
+	}
+
+	var bind = typeof port === 'string'
+		? 'Pipe ' + port
+		: 'Port ' + port;
+
+	// handle specific listen errors with friendly messages
+	switch (error.code) {
+		case 'EACCES':
+			console.error(bind + ' requires elevated privileges');
+			process.exit(1);
+			break;
+		case 'EADDRINUSE':
+			console.error(bind + ' is already in use');
+			process.exit(1);
+			break;
+		default:
+			throw error;
+	}
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+function onListening() {
+	var addr = server.address();
+	var bind = typeof addr === 'string'
+		? 'pipe ' + addr
+		: 'port ' + addr.port;
+	debug('Listening on ' + bind);
+}
+
+function updateFailedLogin(userId, failedAttempts) {
+	var data = {};
+	data = {
+		"failed_attempts": (parseInt(failedAttempts) ? parseInt(failedAttempts) : 0) + 1
+	};
+	if (failedAttempts == CONSTANT_OBJ.MAX_FAILED_ATTEMPTS) {
+		data.last_attempt = new Date(new Date().getTime());
+	}
+
+	models.users.update(data, {
+		where: {
+			id: userId
+		}
+	}).then(function (user) {
+		console.log("updateDat6a", user);
+	})
+		.catch(function (err) {
+			console.log('\n\n\n', err);
+
+		});
+	console.log("userData", userId);
+}
+function updateLoginAttempts(userId, address, browser, geo, status) {
+	var data = {
+		user_id: userId,
+		address: address,
+		browser: browser,
+		status: status,
+		datetime: new Date()
+	}
+	if (geo) {
+		data.city = geo.city;
+		data.country = geo.country;
+		data.lat = geo.ll[0];
+		data.lng = geo.ll[1];
+		data.zip = geo.zip;
+	}
+	models.user_login_attempts.build(data).save().then(function () {
+		console.log("hello done");
+		
+
+	}).catch(function (err) {
+		console.log('\n\n\n00000000000000000000000', err);
+
+	});
+
+}
+
+
+/*________________________________________________________________________
+* @Date:            12 June 2017
+* @Method :         get notification
+* Created By:       smartData Enterprises Ltd
+* Modified On:      -
+* @Purpose:         Get notification.
+_________________________________________________________________________
+*/
+var getNotification = function (check_mins) {
+	console.log("get notification here with cron web");
+	var now = moment();
+	var date = moment();
+	var endDate = moment(now);
+	var startDate = moment(now);
+	startDate.set({
+		hour: 0,
+		minute: 0,
+		second: 0,
+		millisecond: 0
+	});
+	endDate.set({
+		hour: 23,
+		minute: 59,
+		second: 59,
+		millisecond: 999
+	});
+	var timeStart = moment().subtract(moment.duration(15, 'minutes')).format(STRING_CONSTANTS.DATE_CONSTANT.YEAR_MONTH_FORMAT);
+	var query = {
+		scheduled_time_end_date: timeStart,
+	}
+	console.log("query to get web failed notiticqtion", query);
+	models.aide_activities.findAll({
+		where: {
+			date: { gte: startDate.toDate(), lte: endDate.toDate() },
+			is_active: true,
+			verification_status: false,
+			task_performed: false
+		},
+		include: [{
+			model: models.schedule_activities,
+			required: true,
+			where: query,
+			include: [{
+				model: models.admin_activities,
+				required: false
+			}],
+			order: [
+				["updatedAt", STRING_CONSTANTS.SORT_ORDER.DESC]
+			]
+		}, {
+			model: models.aide,
+			required: true,
+			include: [{
+				model: models.aide_details,
+				required: false
+			}]
+		}, {
+			model: models.schedule,
+			required: true
+		}, {
+			model: models.patients,
+			required: false,
+			include: [{
+				model: models.patient_details,
+				required: false
+			}]
+		}]
+	})
+		.then(function (data) {
+			models.admin_activities.findAll({
+			}).then(function (allAdminActivities) {
+				var notarr = [];
+				if (data.length > 0) {
+					data.forEach(function (value, key) {
+						models.notification.find({
+							where: {
+								aide_activities: value.id
+							}
+						}).then(function (notificationData) {
+							if (!notificationData) {
+								var obj = {}
+								obj.is_read = false;
+								obj.aide_id = value.aide_id;
+								obj.patient_id = value.patient_id;
+								obj.agency_id = value.user_id;
+								obj.scheduled_id = value.scheduled_id;
+								obj.scheduled_activity_id = value.scheduled_activity_id;
+								obj.clock_in_out = value.schedule_activity.clock_in_out;
+								obj.main_schedule_id = value.main_schedule_id;
+								obj.aide_activities = value.id;
+								obj.schedule = value.scheduled_id;
+								obj.date = value.date;
+								obj.aide_pic = value.aide.aide_detail.pic;
+								var act = "";
+								if (value.schedule_activity.clock_in_out == 2) {
+									act = 'Clock out'
+								} else if (value.schedule_activity.clock_in_out == 1) {
+									act = 'Clock In'
+								} else {
+									act = value.schedule_activity.admin_activity.title;
+									var optionVal = "";
+									allAdminActivities.map(function (obj) {
+										if (obj.id == value.schedule_activity.admin_activity.root_node_id) {
+											optionVal = obj.title;
+										}
+									})
+									if (optionVal != "") {
+										act = act + "(" + optionVal + ")";
+									}
+								}
+								var first = cryptoService.decryptString(value.patient.first_name);
+								var last = cryptoService.decryptString(value.patient.last_name);
+								obj.not_msg = value.aide.first_name + " " + value.aide.last_name + ' has failed ' + act;
+								notarr.push(obj);
+								models.notification.build(obj).save()
+									.then(function (successData) {
+										console.log('notification successfully saved')
+									})
+							}
+						})
+							.catch(function (error) {
+								console.log('\n\n\n', error);
+							})
+					})
+				} else {
+					console.log("no record found")
+				}
+				try {
+					io.emit('check_notification', notarr);
+				} catch (e) {
+					console.log("error in notification for dropdown", e);
+				}
+			})
+				.catch(function (err) {
+					console.log("error in web notification for dropdown", err);
+				});
+		}).catch(function (err) {
+			console.log("error here in notification", err);
+		})
+}
+exports.getNotification = getNotification;
